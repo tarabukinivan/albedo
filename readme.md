@@ -1,3 +1,5 @@
+wget https://raw.githubusercontent.com/tarabukinivan/albedo/refs/heads/main/pod_install.sh
+
 chmod +x /root/albedo_run/pod_install.sh && bash -n /root/albedo_run/pod_install.sh && echo "syntax OK"
 
 Когда скачаешь нового короля — всегда сначала inspect_champion.py, он скажет какой train запускать. Для большинства королей будет TIED или EXOTIC (как у arboshelper) → train_champion_tied.py. Если когда-то увидишь UNTIED — train_champion_untied.py
