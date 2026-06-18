@@ -1,0 +1,11 @@
+tar -czvf finetune3.tar.gz finetune3
+
+zip -r finetune3.zip finetune3
+
+tar -czvf /root/albedo_ru/finetune3.tar.gz /root/albedo_run/finetune3/
+
+Распаковка: Чтобы распаковать созданный архив:
+
+tar -xzvf finetune3.tar.gz
+
+unzip finetune3.zip
