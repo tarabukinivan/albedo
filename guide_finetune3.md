@@ -33,7 +33,9 @@ finetune3/
 ├── GUIDE.md                            ⭐ читать первым
 ├── scripts/
 │   ├── download_champion.py             ⭐ скачать короля из Hippius
-│   ├── train_champion.py                ⭐ low-LR SFT с frequent checkpoints
+│   ├── inspect_champion.py              ⭐ детектор: tied / exotic / untied → какой train запускать
+│   ├── train_champion_tied.py           ⭐ для TIED / EXOTIC королей (arboshelper-style, нормальный кейс)
+│   ├── train_champion_untied.py         для UNTIED королей (редкий, когда lm_head действительно отдельный)
 │   ├── fingerprint_check.py             ⭐ прод-identical clone-detection
 │   ├── reshard.py                       решард в 5×2GB для Hippius
 │   ├── validate_local.py                12 локальных проверок
@@ -119,23 +121,42 @@ print(f\"  score:  {king['score_challenger']:.4f}\")
 
 ```bash
 python3 scripts/download_champion.py \
-  --repo arboshelper/albedo-qwen3-4b-2-5-final \
+  --repo <new-king-namespace>/albedo-qwen3-4b-<name> \
   --revision main \
   --out /workspace/models/champion
 ```
 
 Time: ~1-2 мин (~8.8 GB через Hippius).
 
-Скрипт автоматически проверит **untied ли lm_head** и параметры (должно быть
-4.41B / 399 тензоров если untied).
+### Шаг 4. ⭐ Inspect — определить tied / exotic / untied
 
-### Шаг 4. Тренировка (короткая, в tmux)
+**Это критично делать перед train.** Скрипт выясняет какой именно вариант
+тренировки запускать.
+
+```bash
+python3 scripts/inspect_champion.py --champion-dir /workspace/models/champion
+```
+
+Что увидишь — один из трёх исходов:
+
+| VERDICT | Значение | Какой train запускать |
+|---|---|---|
+| **✅ TIED** | 398 тензоров, lm_head не в state_dict | `train_champion_tied.py` |
+| **⚠️ EXOTIC** | 399 тензоров, identical bytes (как arboshelper) | `train_champion_tied.py` (transformers v5 при load выкинет дубль → работает как tied) |
+| **🔥 UNTIED** | 399 тензоров, lm_head ≠ embed | `train_champion_untied.py` (нужен special-save) |
+
+Большинство королей будет **EXOTIC** (как arboshelper). Реальный untied почти не
+встречается — если увидишь, читай **§5 «UNTIED variant»** ниже.
+
+### Шаг 5. Тренировка (короткая, в tmux)
+
+#### Если VERDICT = TIED или EXOTIC (нормальный кейс):
 
 ```bash
 cd /root/albedo_run/finetune3
 tmux new-session -d -s champ -c /root/albedo_run/finetune3
 tmux send-keys -t champ 'source /root/albedo/.venv/bin/activate && \
-python3 scripts/train_champion.py \
+python3 scripts/train_champion_tied.py \
   --champion-dir /workspace/models/champion \
   --data /root/albedo_run/finetune3/data/sft/train_v3.jsonl \
   --output /root/albedo_run/finetune3/ckpt/champ \
@@ -151,8 +172,7 @@ ETA: ~5-15 минут на H100 для 60 шагов.
 
 Что в логе ожидать:
 ```
-  param count:  4.411 B
-  lm_head untied (separate from embed_tokens): True
+  trainable params: 4.022 B  (tied — 398 unique tensors)
   Dataset (prompt/completion): 2371 kept, 0 too long
 
 === Training (low LR, frequent checkpoints) ===
@@ -165,6 +185,29 @@ Saving checkpoint-60
 
 Saving final to .../ckpt/champ/final ...
 ```
+
+#### Если VERDICT = UNTIED (редкий кейс):
+
+Замени название скрипта на `train_champion_untied.py` — остальные аргументы те же:
+
+```bash
+tmux send-keys -t champ 'source /root/albedo/.venv/bin/activate && \
+python3 scripts/train_champion_untied.py \
+  --champion-dir /workspace/models/champion \
+  --data /root/albedo_run/finetune3/data/sft/train_v3.jsonl \
+  --output /root/albedo_run/finetune3/ckpt/champ_untied \
+  --lr 5e-7 --max-steps 60 --save-steps 10 \
+  --batch-size 2 --grad-accum 8 \
+  --no-flash-attn \
+  2>&1 | tee /tmp/champ_train.log; echo "EXIT=${PIPESTATUS[0]} at $(date)"' Enter
+```
+
+ETA: ~10-20 минут на H100 (чуть медленнее из-за +389M params в оптимизаторе).
+Чекпойнт ~8.82 GB (vs 8.04 у tied).
+
+В логе вместо `4.022 B` увидишь `4.411 B`. После save — `✓ OK — lm_head и
+embed_tokens — отдельные, разные тензоры`. Если `✗ FAIL` — что-то пошло не так,
+не использовать чекпойнт.
 
 ### Шаг 5. Найти sweet-spot checkpoint
 
@@ -203,7 +246,8 @@ done
 
 ```bash
 # Если 60 шагов не хватило (маловероятно при lr=5e-7):
-python3 scripts/train_champion.py ... --max-steps 120 --save-steps 20
+python3 scripts/train_champion_tied.py ... --max-steps 120 --save-steps 20
+# (или train_champion_untied.py если у тебя UNTIED king)
 ```
 
 ### Шаг 6. Также проверить против genesis и Instruct-2507
@@ -357,7 +401,8 @@ hurricanebooster уже жаловался на dedup false positives — зна
 
 - [ ] Король изменился? — если да, скачать свежего и переобучить
 - [ ] download_champion.py показал untied (399 тензоров)
-- [ ] train_champion.py дошёл до конца, есть 6+ checkpoint'ов
+- [ ] inspect_champion.py запущен ПЕРВЫМ — выбран правильный train-скрипт
+- [ ] train_champion_tied.py (или _untied.py) дошёл до конца, есть 6+ checkpoint'ов
 - [ ] Выбран самый ранний checkpoint с similarity < 0.95 vs source champion
 - [ ] Тот же checkpoint имеет similarity < 0.95 vs ВСЕ другие models (Qwen3-4B, Instruct-2507, overridden)
 - [ ] reshard в 5×2GB прошёл, untie verify OK
