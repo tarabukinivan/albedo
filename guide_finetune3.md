@@ -89,14 +89,37 @@ finetune3/
 ## 3. Pipeline
 
 ### Шаг 1. Сетап pod'а (если новый)
-
+Взял А100 2.8
 ```bash
 # 1. Скопировать finetune3 на pod
 scp -r /root/albedo_run/finetune3 user@pod:/root/albedo_run/
 
+python3 -m http.server 5181
+
+apt update -y
+apt install nano sudo -y
+mkdir /root/albedo_run/ && cd /root/albedo_run/
+
+wget http://65.108.10.239:5181/finetune3.tar.gz
+
+tar -xzvf finetune3.tar.gz
+rm finetune3.tar.gz
+
 # 2. На pod'е
 cd /root/albedo_run/finetune3
 bash scripts/setup_pod.sh   # достаёт overridden базу — нужна для validate_local fingerprint check
+
+#albedo
+cd
+git clone https://github.com/unarbos/albedo
+
+
+cd ~/albedo
+python3 -m venv .venv && source .venv/bin/activate   # or: sv
+pip install -e .
+
+cp .env.example_miners .env
+nano .env из 65
 
 # 3. Активировать venv
 source /root/albedo/.venv/bin/activate
